@@ -1,0 +1,551 @@
+---
+title: "Analysis of crime and climate data for Colchester"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE,warning = FALSE,message = FALSE)
+```
+
+## Introduction:
+This task involves the analysis of crime and climate data for Colchester in 2024–25 to determine any correlation between climatic patterns and street-level crime occurrences. The crime2024-25.csv data set provides details on individual crime occurrences by type, location, and date to provide a complete picture of criminal activity. Aiding this, two climate data temp2024-25.csv and temp2023-24.csv—contain daily weather information from a local station, which gives details on temperature, humidity, precipitation, and other meteorological parameters. With the integration of crime and weather information, this analysis seeks to determine if weather factors have a correlation with variations in the frequency or types of crime. These findings may be beneficial in informing the local law enforcement patterns and resource deployment. Also, a comparison of climatic data of 2024–25 with the last year will allow one to identify any major climatic anomalies that may have dictated the patterns of crime. This cross disciplinary integration of criminology with environmental data science works for applied public safety research.
+
+
+```{r, echo=FALSE, include=FALSE,warning=FALSE}
+#import all required Libraries
+library(knitr)
+library(dplyr)
+library(ggplot2)
+library(leaflet)
+library(zoo)       
+library(scales)
+library(readr)
+library(kableExtra)
+library(lubridate)
+library(tidyr)
+library(ggpubr)
+library(ggforce)
+library(corrplot)
+```
+## Dataset Explanation:
+The crime2024-25.csv dataset contains detailed street-level crime information for Colchester covering the April 2024 to March 2025 timeframe, with 6,047 records. Each record is a unique crime incident, as coded by an ID and possibly a persistent ID. Key variables include the nature of the crime (e.g., anti-social behaviour, violent crime), date, geographical coordinates (latitude and longitude), and street-level location at which the incident took place. There are also columns that contain contextual data such as location type, road name, and outcome status (e.g., "Under investigation" or "Unable to prosecute suspect"). Some entries have missing data on fields such as persistent ID and outcome. The information comes from UK Police data and is intended to facilitate spatial and temporal examination of crime trends for evaluating patterns and responses to local police activity.
+
+```{r, echo=FALSE, include=TRUE,warning=FALSE}
+# Load the dataset
+df <- read.csv("crime2024-25.csv")
+```
+## Data Preprocessing:
+Preprocessing of data guarantees that the crime dataset is clean and ready for analysis. The str(df) command checks initially the data frame structure to confirm data types. colSums(is.na(df)) identifies missing values across all columns. The date column, previously in string format, is now read to a proper date format using ym() so accurate time-based analysis is possible. Categorical variables—category, location_type, and outcome_status—are converted to factors so as to facilitate statistical modeling and plotting.
+
+For missing values in outcome_status, the factor is first converted to character type in order to allow for safe replacement. This is then succeeded by the replace_na() function, where missing values are replaced by "Unknown" for uniformity and to avoid analysis complications. All these combined prepare the dataset for the next phase of tasks such as summarization, visualization, and modeling, while preserving data integrity and making the dataset compatible with R data-handling functions.
+
+```{r, echo=FALSE, include=TRUE,warning=FALSE}
+# Check structure
+str(df)
+
+# View missing values per column
+colSums(is.na(df))
+
+# Convert date to proper format
+df$date <- ym(df$date)
+
+# Convert categorical fields to factors
+df$category <- as.factor(df$category)
+df$location_type <- as.factor(df$location_type)
+df$outcome_status <- as.factor(df$outcome_status)
+
+
+# ---------------------------
+
+# Fill missing outcome_status with 'Unknown'
+# Safe replacement for NA in factor columns
+df$outcome_status <- as.character(df$outcome_status)
+df$outcome_status <- replace_na(df$outcome_status, "Unknown")
+
+```
+
+```{r, echo=FALSE, include=TRUE,warning=FALSE}
+# Frequency of crime categories
+category_freq <- as.data.frame(table(df$category))
+kable(category_freq,
+      col.names = c("Crime Category", "Frequency"),
+      align = 'r',
+      caption = "Table  - Frequency of Crime Categories")
+```
+*Table 1: *
+Crime Category Frequencies: This frequency table provides the categories and their frequencies of reported offenses by the crime category. Violent crime (2,314) is the most frequent, followed by anti-social behaviour (668) and shoplifting (643). Possession of weapons and robbery are the least frequent. It provides prominent crime types in Colchester for 2024–25.
+
+
+```{r, echo=FALSE, include=TRUE,warning=FALSE}
+# Frequency of outcome status
+outcome_freq <- as.data.frame(table(df$outcome_status))
+kable(outcome_freq,
+      col.names = c("Outcome Status", "Frequency"),
+      align = 'r',
+      caption = "Table  - Frequency of Outcome Status")
+```
+*Table 2: *
+Outcome Status Frequencies: This shows what became of each offence. Most common is "Investigation complete; no suspect identified" (2,002 cases), implying problems in identifying culprits. "Unable to prosecute suspect" (1,793) is also common. "Unknown" (668) accounts for missing data. Formal or court-based outcomes happened in only a small minority.
+
+```{r, echo=FALSE, include=TRUE,warning=FALSE}
+# Location type vs. Outcome status (two-way table)
+loc_outcome_table <- as.data.frame.matrix(table(df$location_type, df$outcome_status))
+loc_outcome_table <- cbind(LocationType = rownames(loc_outcome_table), loc_outcome_table)
+kable(loc_outcome_table,
+      align = 'r',
+      caption = "Table  - Location Type vs. Outcome Status")
+```
+*Table 3:*
+Outcome by Police Force: This table divides outcomes by police force. All substantial outcomes (e.g., prosecutions, investigations, cautions) occurred under Force. BTP added only a few records, with few or no cases closed, corroborating that Force processed the lion's share of crime and follow-up actions.
+
+```{r, echo=FALSE, include=TRUE,warning=FALSE}
+# 4: Crime category vs. Location type (two-way table)
+cat_loc_table <- as.data.frame.matrix(table(df$category, df$location_type))
+cat_loc_table <- cbind(CrimeCategory = rownames(cat_loc_table), cat_loc_table)
+kable(cat_loc_table,
+      align = 'r',
+      caption = "Table - Crime Category vs. Location Type")
+```
+*Table 4:*
+Crime Type by Police Force: This is a comparison of categories of BTP crime and Force. BTP handled relatively few crimes (e.g., 1 bike theft, 4 violent crimes), while Force handled most of them, including all anti-social behaviour, burglary, and shoplifting. This is the same as general street crime in Colchester being within local police jurisdiction.
+
+```{r, echo=FALSE, include=TRUE,warning=FALSE}
+# Aggregate incident counts by month (date)
+df_aggregated <- df %>%
+  group_by(date) %>%
+  summarise(incident_count = n())
+
+# Convert date to yearmon for proper time series plotting
+df_aggregated$date <- as.yearmon(df_aggregated$date)
+
+# Plot time series of monthly incidents
+ggplot(df_aggregated, aes(x = date, y = incident_count)) +
+  geom_line(color = "#87CEEB", size = 1.5) +
+  geom_point(color = "#FFD700", size = 3) +
+  geom_smooth(method = "loess", se = FALSE, color = "#FF69B4") +
+  scale_x_yearmon(format = "%Y-%m") +
+  labs(title = "Monthly Incident Counts", x = "Date", y = "Number of Incidents") +
+  theme_minimal()
+
+```
+##Graph 1:
+This graph shows monthly number of cases between May 2024 and March 2025. Starting from a number near 550 cases in May 2024, the number steadily decreases every month afterward. In March 2025, the number falls to near 400 cases, which reflects a steep downward trend for these 10 months.
+
+```{r, echo=FALSE, include=TRUE,warning=FALSE}
+# 1. Top 10 Crime Categories
+top_categories <- df %>%
+  count(category, sort = TRUE) %>%
+  top_n(10)
+
+ggplot(top_categories, aes(x = reorder(category, n), y = n)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  coord_flip() +
+  labs(title = "Top 10 Crime Categories", x = "Crime Type", y = "Count")
+```
+##Graph 2: 
+The graphs plotted shows the top 10 crimes categories from the dataset. From here it can be interpreted that violent crime, antisocial behavior and shoplifting are the 3 major crimes occoured in the city. The violent crimes has occoured almost 2000 times where as bicycle theft and burglary are the least occouring crimes
+
+```{r, echo=FALSE, include=TRUE,warning=FALSE}
+# 2. Outcome Status Distribution
+outcome_dist <- df %>%
+  count(outcome_status, sort = TRUE)
+
+ggplot(outcome_dist, aes(x = reorder(outcome_status, n), y = n, fill = outcome_status)) +
+  geom_col() +
+  coord_flip() +
+  theme_minimal() +
+  labs(title = "Outcome Status Distribution", x = "Outcome", y = "Count")
+
+```
+
+##Graph 3: 
+This bar chart indicates the case outcome status distribution. The most frequent of these are "Investigation complete; no suspect identified" and "Unable to prosecute suspect," both of which have figures of about 500,000. "Under investigation" and "Status update unavailable" are also frequent. Some of the outcomes indicate no action taken further.
+
+```{r, echo=FALSE, include=TRUE,warning=FALSE}
+# Plot top crime locations
+top_locations <- df %>%
+  count(street_name, sort = TRUE) %>%
+  top_n(10)
+
+print(top_locations)
+```
+
+
+
+```{r, echo=FALSE, include=TRUE,warning=FALSE}
+# Count and select top 5 categories
+category_count <- df %>%
+  count(category, sort = TRUE) %>%
+  slice_max(n, n = 5)
+
+# Plot pie chart of top 5 categories
+ggplot(category_count, aes(x = "", y = n, fill = category)) +
+  geom_bar(stat = "identity", width = 1) +
+  coord_polar(theta = "y") +
+  theme_void() +
+  labs(title = "Top 5 Crime Categories")
+
+```
+##Graph 4: 
+This pie chart ranks the top five most common crime types in decreasing order of frequency, led by the greatest category of anti-social behaviour. Next is criminal damage and arson, followed by public order offence. Then violent crime and shoplifting fill out the top five as the most reported types of crime.
+
+
+```{r, echo=FALSE, include=TRUE,warning=FALSE}
+## Histogram – Latitude Distribution
+ggplot(df, aes(x = lat)) +
+  geom_histogram(bins = 30, fill = "steelblue", color = "black") +
+  labs(title = "Histogram of Latitude", x = "Latitude", y = "Count")
+
+```
+##Graph 5: 
+This histogram displays the frequency distribution of latitude measures, from 51.875 to 51.901. The y-axis is labeled with counts (0–750), and peaks show regions of high density. The tallest bar (presumably around 51.890–51.900) suggests a cluster of data points, convenient for spotting geographic clustering in datasets like crime occurrences, weather stations, or population clusters.
+
+```{r, echo=FALSE, include=TRUE,warning=FALSE}
+##  Violin Plot – Latitude by Outcome Status
+ggplot(df, aes(x = outcome_status, y = lat)) +
+  geom_violin(fill = "tomato") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(title = "Violin Plot of Latitude by Outcome")
+
+```
+##Graph 6: 
+The violin plot depicts how the spread of the values of latitude varies between outcome statuses. All outcomes, apart from "Investigation complete; no suspect identified," have a close spread around the value of latitude 51.885, whereas it has a highly close and greater distribution.
+
+```{r, echo=FALSE, include=TRUE,warning=FALSE}
+## Scatter Plot – Latitude vs Longitude
+ggplot(df, aes(x = long, y = lat, color = category)) +
+  geom_point(alpha = 0.6) +
+  labs(title = "Scatter Plot: Latitude vs Longitude")
+
+```
+##Graph 7: 
+This scatter plot illustrates the correlation between longitude (x-axis, 0.88–0.92) and latitude (y-axis, 51.875–51.905) for different crime types in one specific area. Every point is a crime occurrence, color-coded by type (for example, theft, violence). The graph assists in demonstrating crime distribution geographically, with groups revealing areas of high crime concentration.
+
+```{r, echo=FALSE, include=TRUE,warning=FALSE}
+## Correlation Analysis – Latitude & Longitude
+num_data <- df %>% select(lat, long) %>% na.omit()
+cor_matrix <- cor(num_data)
+
+corrplot(cor_matrix, method = "circle", addCoef.col = "black", tl.col = "black",
+         title = "Correlation Heatmap", mar = c(0, 0, 2, 0))
+
+```
+##Graph 8: 
+This correlation heatmap illustrates the relationship of latitude (lat) and longitude (long) with other variables. The correlations vary from -1 to -0.13, indicating weak to strong negative relationship. Stronger negative association is indicated by denser color, hence the related variables decrease as lat/long value increases.
+
+```{r, echo=FALSE, include=TRUE,warning=FALSE}
+## Box Plot – Latitude by Crime Category
+ggplot(df, aes(x = category, y = lat)) +
+  geom_boxplot(fill = "skyblue") +
+  labs(title = "Box Plot of Latitude by Crime Category", x = "Crime Category", y = "Latitude") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+```
+
+##Graph 9: 
+This box plot shows the distribution of latitudes (y-axis, 51.875–51.905) across various types of crimes (x-axis). Box plots for every crime type (e.g., drugs, theft) show median, quartiles, and outliers. Differences in latitude ranges suggest geospatial clusters of crimes—different types of crimes might be more frequent at specific locations.
+
+
+```{r, echo=FALSE, include=TRUE,warning=FALSE}
+# Step 1: Aggregate crime counts by street, including lat/long and street_name
+top_20_streets <- df %>%
+  group_by(street_id, street_name, lat, long) %>%
+  summarise(crime_count = n(), .groups = "drop") %>%
+  arrange(desc(crime_count)) %>%
+  slice_head(n = 20)   # take top 20
+
+# Step 2: Create interactive leaflet map for top 20 streets
+pal <- colorNumeric("Reds", domain = top_20_streets$crime_count)
+
+leaflet(top_20_streets) %>%
+  addTiles() %>%
+  addCircleMarkers(
+    lng = ~long, lat = ~lat,
+    radius = ~sqrt(crime_count) * 2,
+    color = ~pal(crime_count),
+    stroke = FALSE,
+    fillOpacity = 0.7,
+    label = ~paste0(street_name, ": ", crime_count, " crimes")
+  ) %>%
+  addLegend(
+    position = "bottomright",
+    pal = pal,
+    values = ~crime_count,
+    title = "Crime Count",
+    opacity = 1
+  )
+```
+##Graph 10:
+This script identifies the 20 most criminally-contaminated streets in Colchester by summarizing and aggregating the data set. It continues to use the leaflet package to create an interactive map on which these streets are plotted with circle markers. Marker size and color saturation have been used to indicate the number of crimes. The script includes a legend for clarity, allowing users to visually estimate areas of high crime by location, making it easier for spatial analysis of crimes.
+
+
+```{r, echo=FALSE, include=TRUE,warning=FALSE}
+# Load the dataset
+df_weather <- read.csv("temp2023-24.csv")
+```
+
+## Dataset Explanation
+Temperature data consist of 366 daily weather readings from a station in the Colchester area (station_ID 3590), from April 1, 2023, to March 31, 2024. Every row is a weather reading on a specific date. Key variables are mean, maximum, and minimum temperature (°C), dew point temperature (TdAvgC), mean humidity (HrAvg%), wind speed and direction, station and sea-level air pressure (PresslevHp, PreselevHp), and rainfall (Precmm). Other variables capture cloud cover (TotClOct, lowClOct), sunshine duration (SunD1h), visibility (VisKm), and snow depth (SnowDepcm). Missing values are present in a few columns, notably snow depth and context-related measures. This dataset offers correlation analysis of weather conditions with other variables—e.g., the pattern of daily crimes—on contextual insights into the environment surrounding local crimes.
+
+```{r, echo=FALSE, include=TRUE,warning=FALSE}
+# Convert Date column to Date type
+df_weather$Date <- as.Date(df_weather$Date)
+
+# Two-way table: Wind Direction vs. Precipitation occurrence
+table_wind_precip <- table(
+  WindDir = df_weather$WindkmhDir,
+  Precipitation = df_weather$Precmm > 0
+)
+
+# Convert to data frame format for kable
+df_table_wind_precip <- as.data.frame.matrix(table_wind_precip)
+df_table_wind_precip <- cbind(Wind_Direction = rownames(df_table_wind_precip), df_table_wind_precip)
+
+# Display table using kable
+kable(
+  df_table_wind_precip,
+  col.names = c("Wind Direction", "No Precipitation", "Precipitation"),
+  align = 'r',
+  caption = "Table 6 - Two-way Table: Wind Direction vs. Precipitation Presence"
+)
+```
+
+## Preprocessing and Table 1:
+Preprocessing begins with the conversion of Date column in the weather data to proper Date format using as.Date() to ensure the accuracy of time-dependent operations. A two-way frequency table is subsequently extracted to examine the relationship between the wind direction (WindkmhDir) and the occurrence of precipitation (Precmm > 0). The > operator creates a logical statement where TRUE illustrates days of precipitation and FALSE illustrates dry days. This table is converted to a data frame, in nice form for visualization, by the kable() function for tidy tabular presentation.
+
+The produced table shows precipitation patterns based on different wind directions. For instance, WSW (West-Southwest) registered the highest number of rainy days (27), followed by SW (Southwest) with 26 and SSW (South-Southwest) with 22. Meanwhile, easterly winds like E and ENE had fewer precipitation days. These results mean that precipitation is most probable in Colchester when wind comes from southern and western directions, offering valuable knowledge on weather-crime pattern relations.
+
+
+```{r, echo=FALSE, include=TRUE,warning=FALSE}
+# Bar plot - Count of days by Wind Direction
+ggplot(df_weather, aes(x = WindkmhDir)) +
+  geom_bar(fill = "steelblue") +
+  labs(title = "Count of Days by Wind Direction", x = "Wind Direction", y = "Count") +
+  theme_minimal()
+```
+##Graph 1:
+This bar chart displays the number of days by wind direction (for example, N, S, E, W, and intermediates like ENE, SSW). Compass directions are shown along the x-axis, and the not-visible y-axis likely measures counts. It helps to identify prevailing winds, where taller bars denote more frequent wind directions in the data set.
+
+
+```{r, echo=FALSE, include=TRUE,warning=FALSE}
+# Histogram - Distribution of Temperature Average
+ggplot(df_weather, aes(x = TemperatureCAvg)) +
+  geom_histogram(binwidth = 1, fill = "orange", color = "black") +
+  labs(title = "Histogram of Average Temperature", x = "Temperature (°C)", y = "Frequency") +
+  theme_minimal()
+```
+##Graph 2:
+The graph shows the histogram of average temperature and from here it can be interpreted that temperature mostly lies in the range of 5 to 10 degree centigrade. Also there are some days where temperature dropped below the 0 degree that mostly happened during winter. There are also some days where temperature has rose above 20 degree
+
+
+
+```{r, echo=FALSE, include=TRUE,warning=FALSE}
+#  Box plot - Temperature Average by Wind Direction
+ggplot(df_weather, aes(x = WindkmhDir, y = TemperatureCAvg)) +
+  geom_boxplot(fill = "lightgreen") +
+  labs(title = "Boxplot of Average Temperature by Wind Direction", x = "Wind Direction", y = "Avg Temperature (°C)") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+##Graph 3:
+Boxplot to illustrate comparison of mean temperatures (°C) across wind direction (e.g., N, S, E, W). Temperature ranges (10–20°C) are on the y-axis, and wind directions (partially shown) on the x-axis. Boxes represent median, quartiles, and outliers and display how temperature distributions vary by wind direction—easy to detect climate trends or weather patterns
+```{r, echo=FALSE, include=TRUE,warning=FALSE}
+# Scatter plot - Temperature Average vs Pressure Level
+ggplot(df_weather, aes(x = PresslevHp, y = TemperatureCAvg)) +
+  geom_point(alpha = 0.6, color = "purple") +
+  labs(title = "Scatter Plot: Pressure Level vs Temperature Avg", x = "Pressure Level (hPa)", y = "Avg Temperature (°C)") +
+  theme_minimal()
+```
+##Graph 4:
+This scatter plot investigates the relationship between atmospheric pressure levels (x-axis, hPa) and average temperature (y-axis, °C). Temperature range is unusually broad (5–1200°C), which may be due to mistakes or log scaling. Pressure levels (up to 1040 hPa) may either be surface or high-altitude measurements. The graph would likely indicate patterns such as temperature with height or weather.
+
+
+
+
+```{r, echo=FALSE, include=TRUE,warning=FALSE}
+# Calculate correlation matrix
+selected_vars <- df_weather %>%
+  select(TemperatureCAvg, TemperatureCMax, TemperatureCMin, PresslevHp, Precmm)
+cor_matrix <- cor(selected_vars, use = "complete.obs")
+
+# Convert to data frame and round values
+cor_df <- round(as.data.frame(cor_matrix), 2)
+cor_df <- cbind(Variable = rownames(cor_df), cor_df)
+
+# Display using kable
+kable(
+  cor_df,
+  align = "c",
+  caption = "Table: Pearson Correlation Matrix of Selected Weather Variables"
+) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"), full_width = F)
+```
+## Correlation Matrix
+This correlation matrix shows strong positive correlations between temperature observations, especially between mean and maximum temperature (r = 0.98). Precipitation (Precmm) is moderately negatively correlated with pressure (r = -0.42), suggesting rain falls on low-pressure days. Other precipitation correlations are weak or zero.
+
+
+
+```{r, echo=FALSE, include=TRUE,warning=FALSE}
+# Time series plot - Temperature Average over time with smoothing
+ggplot(df_weather, aes(x = Date, y = TemperatureCAvg)) +
+  geom_line(color = "blue") +
+  geom_smooth(method = "loess", se = TRUE, color = "red") +
+  labs(title = "Time Series of Average Temperature with LOESS Smoothing", x = "Date", y = "Avg Temperature (°C)") +
+  theme_minimal()
+```
+##Graph 5:
+This time series plot tracks average temperature (°C) from April 2024 through April 2023, with LOESS smoothing (trend line) highlighting seasonal patterns. Peaks are presumably summer months (e.g., Aug 2023), and troughs represent the cold periods. The smoothed line helps the eye visualize long-term trends, i.e., cycles of warming or cooling, amidst day-to-day fluctuations.
+
+
+
+```{r, echo=FALSE, include=TRUE,warning=FALSE}
+# 9. Interactive plot - Temperature Average over time with plotly
+p <- ggplot(df_weather, aes(x = Date, y = TemperatureCAvg)) +
+  geom_line(color = "darkgreen") +
+  geom_point(alpha = 0.5) +
+  labs(title = "Interactive Time Series: Avg Temperature", x = "Date", y = "Avg Temperature (°C)") +
+  theme_minimal()
+
+plotly::ggplotly(p)
+```
+
+##Graph 6:
+This interactive time series graph plots average temperature trends (°C) from April 2023 to April 2024, from 5°C to 20°C. The user can supposedly zoom in or hover for information. The graph shows seasonal movement—warmer highs (e.g., summer 2023) and colder lows (e.g., winter 2024)—enabling the analysis of climate trends dynamically. Missing data points show an incomplete rendering.
+
+
+## Dataset Explanation:
+The 2024–25 climate data set contains 365 daily values from a Colchester-region weather station (station_ID 3590), starting on April 1, 2024, and ending on March 31, 2025. Each row captures a snapshot of some weather measurements on a given day. All important variables are mean, highest and lowest temperatures (°C), dew point (TdAvgC), humidity (HrAvg%), wind direction and velocity, sea-level pressure (PresslevHp), rainfall (Precmm), cloud cover (TotClOct, lowClOct), duration of sunshine (SunD1h), visibility (VisKm), and depth of snow (SnowDepcm) with some missing values present mainly in snow fields. The details help determine seasonal weather patterns, extreme events, or anomalies. It would also be useful for correlation with other data sets—e.g., crime datasets—towards exploring possible climate-related impacts on human behavior within Colchester.
+
+```{r, echo=FALSE, include=TRUE,warning=FALSE}
+# Load the dataset
+weather_df <- read.csv("temp2024-25.csv")
+```
+
+## Dataset Explanation:
+The 2024–25 climate data set contains 365 daily values from a Colchester-region weather station (station_ID 3590), starting on April 1, 2024, and ending on March 31, 2025. Each row captures a snapshot of some weather measurements on a given day. All important variables are mean, highest and lowest temperatures (°C), dew point (TdAvgC), humidity (HrAvg%), wind direction and velocity, sea-level pressure (PresslevHp), rainfall (Precmm), cloud cover (TotClOct, lowClOct), duration of sunshine (SunD1h), visibility (VisKm), and depth of snow (SnowDepcm) with some missing values present mainly in snow fields. The details help determine seasonal weather patterns, extreme events, or anomalies. It would also be useful for correlation with other data sets—e.g., crime datasets—towards exploring possible climate-related impacts on human behavior within Colchester.
+
+
+
+```{r, echo=FALSE, include=TRUE,warning=FALSE}
+# Convert Date to Date type
+weather_df$Date <- as.Date(weather_df$Date)
+
+# Filter data for 2024 and 2025
+weather_filtered <- weather_df %>%
+  filter(year(Date) %in% c(2024, 2025))
+
+# Two-way table: Wind Direction vs Precipitation presence (Yes/No)
+table_wind_precip <- table(
+  Wind_Direction = weather_filtered$WindkmhDir,
+  Precipitation = ifelse(weather_filtered$Precmm > 0, "Yes", "No")
+)
+
+# Convert to data frame for kable
+df_table_wind_precip <- as.data.frame.matrix(table_wind_precip)
+df_table_wind_precip <- cbind(Wind_Direction = rownames(df_table_wind_precip), df_table_wind_precip)
+
+# Display with kable
+kable(
+  df_table_wind_precip,
+  col.names = c("Wind Direction", "No Precipitation", "Precipitation"),
+  align = 'r',
+  caption = "Table - Two-way Table: Wind Direction vs. Precipitation Presence (2024–2025)"
+)
+```
+## Dataset Description and Table
+
+The data set is first cleaned by converting the Date column to a suitable Date type using as.Date() for effective time filtering. It is then filtered for keeping only records for years 2024 and 2025 using filter(year(Date) %in% c(2024, 2025)). A two-way frequency table is also built with table(), comparing wind direction (WindkmhDir) with presence of precipitation, which is Yes if Precmm > 0 and No otherwise. The table is re-shaped into a data frame for proper display using kable().
+
+Table Result:
+The table shows that precipitation is more frequent when the winds come from southern and western directions, particularly SW (23), SSW (21), and WNW (13). On the other hand, fewer days are experienced with precipitation by easterly directions (E, ENE, ESE). This indicates that there is a strong correlation between wind direction and rain in Colchester, which implies that winds coming from the southwest and west are most likely to be moisture and precipitation carriers for the year 2024–2025.
+
+
+
+```{r, echo=FALSE, include=TRUE,warning=FALSE}
+# Top 5 most frequent wind directions
+wind_dist_top5 <- weather_filtered %>%
+  count(WindkmhDir) %>%
+  arrange(desc(n)) %>%
+  slice_head(n = 5) %>%
+  mutate(pct = n / sum(n) * 100,
+         label = paste0(WindkmhDir, " (", round(pct, 1), "%)"))
+
+# Pie chart for top 5
+ggplot(wind_dist_top5, aes(x = "", y = pct, fill = WindkmhDir)) +
+  geom_col(width = 1, color = "white") +
+  coord_polar(theta = "y") +
+  geom_text(aes(label = label), position = position_stack(vjust = 0.5)) +
+  labs(title = "Top 5 Wind Directions (2024–25)", fill = "Wind Direction") +
+  theme_void()
+
+```
+##Graph 1:
+This graph illustrates the top 5 most frequent wind directions of 2024–25, the top one being SW (25.8%), followed by WSW (22.6%), W (19.4%), SSW (18.8%), and WNW (13.4%). Data shows prevailing winds indicated by percentages, which can be applied in weather analysis, agriculture, or city planning. Percentages show that southwesterly winds dominate in this area.
+
+
+
+
+```{r, echo=FALSE, include=TRUE,warning=FALSE}
+#  Density plot: TemperatureCMax distribution by Year
+weather_filtered <- weather_filtered %>% mutate(Year = year(Date))
+
+ggplot(weather_filtered, aes(x = TemperatureCMax, fill = factor(Year))) +
+  geom_density(alpha = 0.5) +
+  labs(title = "Density Plot of Max Temperature by Year",
+       x = "Max Temperature (°C)", fill = "Year") +
+  theme_minimal()
+```
+##Graph 2:
+This is a plot of 2024 and 2025 range of 2024 maximum temperatures (°C) versus a span of 0°C to 30°C. Overlaid curves indicate peaks in frequency, while trends in temperature are clear. Denser points indicate common temperature ranges, which are helpful in establishing yearly variations, peculiar weather patterns, or climatic anomalies. A graphical trend analysis application.
+
+```{r, echo=FALSE, include=TRUE,warning=FALSE,results='asis'}
+#  Violin plot: Sun Duration by Wind Direction
+ggplot(weather_filtered, aes(x = WindkmhDir, y = SunD1h, fill = WindkmhDir)) +
+  geom_violin(trim = FALSE, alpha = 0.7) +
+  labs(title = "Violin Plot of Sun Duration by Wind Direction",
+       x = "Wind Direction", y = "Sun Duration (hours)") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  guides(fill = "none")
+```
+##Graph 3:
+This violin plot plots sun duration (hours) distribution by different wind directions (e.g., S, SW, W). This paired boxplot and density curve plot shows median, spread, and frequency of sunlight hours per wind direction. Suspicious labels (e.g., "MHz," "VISV") are probably data errors or encoding issues. Suitable for weather-sunlight correlation research.
+
+
+```{r, echo=FALSE, include=TRUE,warning=FALSE}
+# Time series plot: Pressure Level (PresslevHp) with smoothing (GAM smoothing)
+p_ts2 <- ggplot(weather_filtered, aes(x = Date, y = PresslevHp)) +
+  geom_line(color = "#2ca02c") +
+  geom_smooth(method = "gam", formula = y ~ s(x), se = TRUE, color = "red") +
+  labs(title = "Time Series of Pressure Level with GAM Smoothing (2024-25)",
+       x = "Date", y = "Pressure Level (hPa)") +
+  theme_minimal()
+print(p_ts2)
+```
+##Graph 4:
+This time series graphs pressure values (hPa) April 2024 to April 2025, using GAM smoothing to detect trends. Pressure ranges 980–1040 hPa, and changes are most likely due to weather patterns. Seasonal patterns can be seen using the smoothed curve, i.e., storms (dips) or high-pressure regions (peaks). Note: "MPa" is likely a unit mistake (should read hPa).
+
+```{r, echo=FALSE, include=TRUE,warning=FALSE,results='asis'}
+# 9. Interactive scatter plot: TemperatureCMax vs TemperatureCMin colored by Year
+p_interactive2 <- ggplot(weather_filtered, aes(x = TemperatureCMin, y = TemperatureCMax,
+                                              color = factor(Year), text = paste("Date:", Date))) +
+  geom_point(alpha = 0.7) +
+  labs(title = "Interactive Scatter Plot: Max vs Min Temperature (2024-25)",
+       x = "Min Temperature (°C)", y = "Max Temperature (°C)", color = "Year") +
+  theme_minimal()
+
+plotly::ggplotly(p_interactive2, tooltip = "text")
+```
+##Graph 5:
+
+This dynamic scatter plot displays 2024 and 2025 max and min temperatures (°C), with points colored by year. The x-axis is min temps (0–10°C), and the y-axis is max temps (0–30°C). Users can likely hover/click for data. Reveals correlations (e.g., larger max temps with larger min temps) and year-to-year variability of temperature extremes.
+
+## REFERENCES:
+
+
+1)https://moodle.essex.ac.uk/course/view.php?id=12150
+
+2)https://moodle.essex.ac.uk/pluginfile.php/1770088/mod_resource/content/1/More_on_Advanced_graphics.pdf
+
+3)Healy, K. (2019). Data Visualization: A Practical Introduction. Princeton University Press.
+
