@@ -46,5 +46,5 @@ The full details, with graphs, are included in the R Markdown file.
 ## How to Run the Project  
 1. Clone this repository:  
    ```bash
-   git clone https://github.com/your-username/colchester-crime-climate-analysis.git
+   git clone https://github.com/your-username/Analysis-of-Crime-and-Climate-Data-for-Colchester.git
 
